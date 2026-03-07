@@ -37,6 +37,7 @@ This will:
 4. Write `gpu-host.conf` to `~/.exegol/my-resources/setup/gpu/`
 5. Copy `setup-gpu.sh` to `~/.exegol/my-resources/setup/gpu/`
 6. Patch `load_user_setup.sh` to auto-run GPU setup on every new container
+7. Add `--gpu` wrapper to your shell (`~/.zshrc` or `~/.bashrc`)
 
 ```bash
 # Start Exegol with GPU
@@ -65,6 +66,8 @@ gpu-watch     # live nvidia-smi monitor
 - Configures Docker NVIDIA runtime and restarts Docker if needed
 - Writes all detected values to `gpu-host.conf`
 - Copies `setup-gpu.sh` and patches `load_user_setup.sh`
+- Adds an `exegol()` shell wrapper that translates `--gpu` into `--privileged -e NVIDIA_VISIBLE_DEVICES=all -e NVIDIA_DRIVER_CAPABILITIES=compute,utility`
+- No hardcoded driver versions — survives driver updates without changes
 
 ### Container Side (`setup-gpu.sh`)
 
