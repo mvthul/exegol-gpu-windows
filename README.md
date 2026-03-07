@@ -15,8 +15,9 @@ Auto-detects your host NVIDIA driver version, writes a config file, and ensures 
 ## Prerequisites
 
 1. **NVIDIA drivers** installed on host
-2. **nvidia-container-toolkit** installed (the script will guide you if missing)
-3. **Docker** configured with NVIDIA runtime
+2. **Docker** installed
+
+The script automatically installs **nvidia-container-toolkit** and configures the **Docker NVIDIA runtime** if they're missing.
 
 ## Quick Start
 
@@ -31,10 +32,11 @@ cd exegol-gpu
 
 This will:
 1. Detect your GPU model, driver version, CUDA version, compute capability
-2. Verify nvidia-container-toolkit is installed (prints distro-specific install instructions if not)
-3. Write `gpu-host.conf` to `~/.exegol/my-resources/setup/gpu/`
-4. Copy `setup-gpu.sh` to `~/.exegol/my-resources/setup/gpu/`
-5. Patch `load_user_setup.sh` to auto-run GPU setup on every new container
+2. Install nvidia-container-toolkit if missing (via pacman/dnf/apt)
+3. Configure Docker NVIDIA runtime and restart Docker if needed
+4. Write `gpu-host.conf` to `~/.exegol/my-resources/setup/gpu/`
+5. Copy `setup-gpu.sh` to `~/.exegol/my-resources/setup/gpu/`
+6. Patch `load_user_setup.sh` to auto-run GPU setup on every new container
 
 ```bash
 # Start Exegol with GPU
@@ -59,7 +61,8 @@ gpu-watch     # live nvidia-smi monitor
 - Detects distro family (Arch/Fedora/Debian) via `/etc/os-release`
 - Queries `nvidia-smi` for GPU name, driver version, CUDA version, compute cap, VRAM
 - Finds host nvidia lib path (`/usr/lib` on Arch, `/usr/lib/x86_64-linux-gnu` on Debian, `/usr/lib64` on Fedora)
-- Checks nvidia-container-toolkit and Docker NVIDIA runtime
+- Installs nvidia-container-toolkit if missing (pacman/dnf/apt)
+- Configures Docker NVIDIA runtime and restarts Docker if needed
 - Writes all detected values to `gpu-host.conf`
 - Copies `setup-gpu.sh` and patches `load_user_setup.sh`
 
@@ -101,8 +104,8 @@ exegol-gpu/
 ### "No NVIDIA driver libraries found in container"
 Container wasn't started with GPU passthrough. Use: `exegol start <name> <image> --gpu`
 
-### "nvidia-container-toolkit NOT installed"
-The script prints distro-specific install instructions. Follow them, then re-run.
+### nvidia-container-toolkit install fails
+The script auto-installs via pacman/dnf/apt. If it fails, check your package manager and internet connection. You can also install manually per [NVIDIA docs](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
 
 ### "DRIVER MISMATCH" warning
 Your host driver was updated since the last `install-gpu.sh` run. Re-run it on the host.
