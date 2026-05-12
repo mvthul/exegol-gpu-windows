@@ -190,23 +190,43 @@ configure_docker_runtime() {
 
     DOCKER_RUNTIMES=$(docker info 2>/dev/null | grep -i "runtimes" || echo "")
     if echo "$DOCKER_RUNTIMES" | grep -qi "nvidia"; then
-        echo -e "${GREEN}[+]${NC} Docker NVIDIA runtime already configured"
-        return
+        echo -e "${GREEN}[+]${NC} Docker NVIDIA runtime already registered"
+    else
+        echo -e "${YELLOW}[~]${NC} Docker NVIDIA runtime not configured. Configuring..."
+
+        if ! command -v nvidia-ctk &>/dev/null; then
+            echo -e "${RED}[-]${NC} nvidia-ctk not found - cannot configure runtime"
+            return 1
+        fi
+
+        sudo nvidia-ctk runtime configure --runtime=docker 2>/dev/null || {
+            echo -e "${RED}[-]${NC} Failed to configure Docker runtime"
+            return 1
+        }
     fi
 
-    echo -e "${YELLOW}[~]${NC} Docker NVIDIA runtime not configured. Configuring..."
-
-    if ! command -v nvidia-ctk &>/dev/null; then
-        echo -e "${RED}[-]${NC} nvidia-ctk not found - cannot configure runtime"
-        return 1
+    # nvidia-ctk may set nvidia as the default runtime.
+    # This breaks ALL containers (not just GPU ones) after a driver update
+    # because containerd caches the shim and fails with an unsupported protocol
+    # error until restarted. Keep runc as the default — nvidia is available
+    # explicitly via --runtime=nvidia or NVIDIA_VISIBLE_DEVICES when needed.
+    DAEMON_JSON="/etc/docker/daemon.json"
+    if [ -f "$DAEMON_JSON" ]; then
+        CURRENT_DEFAULT=$(python3 -c "import json; d=json.load(open('$DAEMON_JSON')); print(d.get('default-runtime','runc'))" 2>/dev/null)
+        if [ "$CURRENT_DEFAULT" = "nvidia" ]; then
+            echo -e "${YELLOW}[~]${NC} Docker default runtime is nvidia — switching to runc..."
+            sudo python3 -c "
+import json
+with open('$DAEMON_JSON') as f: cfg = json.load(f)
+cfg['default-runtime'] = 'runc'
+with open('$DAEMON_JSON', 'w') as f: json.dump(cfg, f, indent=4)
+f.write('\n')
+" && echo -e "${GREEN}[+]${NC} Default runtime set to runc (nvidia still available as explicit runtime)"
+        fi
     fi
 
-    sudo nvidia-ctk runtime configure --runtime=docker 2>/dev/null || {
-        echo -e "${RED}[-]${NC} Failed to configure Docker runtime"
-        return 1
-    }
-
-    echo -e "${BLUE}[*]${NC} Restarting Docker..."
+    echo -e "${BLUE}[*]${NC} Restarting containerd and Docker..."
+    sudo systemctl restart containerd 2>/dev/null || true
     sudo systemctl restart docker 2>/dev/null || {
         echo -e "${YELLOW}[~]${NC} Could not restart Docker via systemctl"
         echo -e "${YELLOW}[~]${NC} Restart Docker manually, then re-run this script"
@@ -215,11 +235,94 @@ configure_docker_runtime() {
 
     # Verify after restart
     DOCKER_RUNTIMES=$(docker info 2>/dev/null | grep -i "runtimes" || echo "")
+    DEFAULT_RUNTIME=$(docker info 2>/dev/null | grep -i "Default Runtime" || echo "")
     if echo "$DOCKER_RUNTIMES" | grep -qi "nvidia"; then
         echo -e "${GREEN}[+]${NC} Docker NVIDIA runtime configured and verified"
+        echo -e "${GREEN}[+]${NC} ${DEFAULT_RUNTIME}"
     else
         echo -e "${YELLOW}[~]${NC} Runtime configured but not detected - Docker may need a manual restart"
     fi
+}
+
+# --------------------------------------------------------------------------
+# 3b. Install pacman hook (Arch only) to auto-restart containerd + Docker
+#     after NVIDIA driver updates — prevents the broken shim error
+# --------------------------------------------------------------------------
+install_update_hook() {
+    [ "$DISTRO_FAMILY" != "arch" ] && return
+
+    echo ""
+    echo -e "${BLUE}[*]${NC} Checking NVIDIA update hook for Arch..."
+
+    HOOK_SCRIPT="/usr/local/bin/nvidia-docker-reload"
+    HOOK_FILE="/etc/pacman.d/hooks/nvidia-docker-reload.hook"
+
+    # If hook script exists and already restarts containerd, nothing to do
+    if [ -f "$HOOK_SCRIPT" ] && grep -q "restart containerd" "$HOOK_SCRIPT"; then
+        echo -e "${GREEN}[+]${NC} NVIDIA update hook already configured"
+        return
+    fi
+
+    sudo mkdir -p /etc/pacman.d/hooks
+
+    sudo tee "$HOOK_SCRIPT" > /dev/null << 'HOOKSCRIPT'
+#!/bin/bash
+# Restarts containerd + Docker after NVIDIA driver updates.
+# containerd caches shim state — without a restart after a driver update
+# all containers fail with "unsupported protocol" until containerd is cycled.
+
+LOADED_VER=$(cat /proc/driver/nvidia/version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' | head -1)
+PKG_VER=$(pacman -Q nvidia-utils 2>/dev/null | awk '{print $2}' | cut -d- -f1)
+
+logger -t nvidia-docker-reload "loaded=$LOADED_VER pkg=$PKG_VER"
+
+if [[ "$LOADED_VER" == "$PKG_VER" ]]; then
+    logger -t nvidia-docker-reload "versions match — restarting containerd and docker"
+    systemctl restart containerd && systemctl restart docker
+    exit 0
+fi
+
+if lsof /dev/nvidia* 2>/dev/null | grep -q .; then
+    logger -t nvidia-docker-reload "WARN: /dev/nvidia* in use — reboot required"
+    wall "NVIDIA driver updated. Reboot required before Docker GPU containers will work."
+    touch /run/nvidia-reboot-required
+    exit 0
+fi
+
+modprobe -r nvidia_uvm nvidia_drm nvidia_modeset nvidia 2>/dev/null
+if modprobe nvidia; then
+    logger -t nvidia-docker-reload "modules reloaded — restarting containerd and docker"
+    systemctl restart containerd && systemctl restart docker
+else
+    logger -t nvidia-docker-reload "module reload failed — reboot required"
+    wall "NVIDIA driver updated. Reboot required before Docker GPU containers will work."
+    touch /run/nvidia-reboot-required
+fi
+HOOKSCRIPT
+
+    sudo chmod +x "$HOOK_SCRIPT"
+
+    sudo tee "$HOOK_FILE" > /dev/null << 'HOOKDEF'
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = nvidia
+Target = nvidia-dkms
+Target = nvidia-utils
+Target = nvidia-open
+Target = linux-cachyos-nvidia-open
+Target = linux-cachyos-lts-nvidia-open
+Target = nvidia-container-toolkit
+
+[Action]
+Description = Restarting containerd and Docker after NVIDIA update...
+When = PostTransaction
+Exec = /bin/sh -c "/usr/local/bin/nvidia-docker-reload"
+Depends = bash
+HOOKDEF
+
+    echo -e "${GREEN}[+]${NC} Pacman hook installed — containerd + Docker restart automatically after NVIDIA updates"
 }
 
 # --------------------------------------------------------------------------
@@ -437,6 +540,7 @@ detect_distro
 detect_gpu
 install_container_toolkit || exit 1
 configure_docker_runtime
+install_update_hook
 write_config
 copy_container_script
 patch_setup_script
@@ -451,4 +555,9 @@ echo "Start Exegol with GPU:"
 echo -e "  ${YELLOW}exegol start <name> <image> --gpu${NC}"
 echo ""
 echo "After driver updates, re-run this script to update gpu-host.conf."
+echo ""
+echo "NOTE (Arch/CachyOS): The pacman hook installed above will automatically"
+echo "restart containerd + Docker after every NVIDIA package update."
+echo "If you skip re-running this script, Exegol containers may warn about"
+echo "a driver mismatch but will still function with the mounted driver."
 echo ""

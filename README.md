@@ -63,7 +63,8 @@ gpu-watch     # live nvidia-smi monitor
 - Queries `nvidia-smi` for GPU name, driver version, CUDA version, compute cap, VRAM
 - Finds host nvidia lib path (`/usr/lib` on Arch, `/usr/lib/x86_64-linux-gnu` on Debian, `/usr/lib64` on Fedora)
 - Installs nvidia-container-toolkit if missing (pacman/dnf/apt)
-- Configures Docker NVIDIA runtime and restarts Docker if needed
+- Configures Docker NVIDIA runtime, ensures `runc` stays the default runtime, and restarts containerd + Docker
+- On Arch/CachyOS: installs a pacman hook that auto-restarts containerd + Docker after every NVIDIA update
 - Writes all detected values to `gpu-host.conf`
 - Copies `setup-gpu.sh` and patches `load_user_setup.sh`
 - Adds an `exegol()` shell wrapper that translates `--gpu` into `--privileged -e NVIDIA_VISIBLE_DEVICES=all -e NVIDIA_DRIVER_CAPABILITIES=compute,utility`
@@ -84,12 +85,17 @@ gpu-watch     # live nvidia-smi monitor
 
 ## After Driver Updates
 
+**Arch/CachyOS**: The pacman hook installed by `install-gpu.sh` handles this automatically — containerd and Docker restart after every NVIDIA package update. No manual action needed.
+
+**All distros**: Re-run on the host to refresh `gpu-host.conf`:
+
 ```bash
-# Re-run on host to update the config
 ./install-gpu.sh
 ```
 
 Next time a container starts, the container-side script will pick up the new driver version. If there's a mismatch with a running container, it warns but proceeds with whatever driver is actually mounted.
+
+> **Why containerd must restart after a driver update:** containerd caches the container shim at creation time. If the NVIDIA runtime shim changes (due to a driver update) and containerd isn't restarted, all containers — even non-GPU ones — fail to start with `unsupported protocol` errors. The pacman hook and this script both restart containerd first, then Docker, to clear this state.
 
 ## Files
 
@@ -112,6 +118,18 @@ The script auto-installs via pacman/dnf/apt. If it fails, check your package man
 
 ### "DRIVER MISMATCH" warning
 Your host driver was updated since the last `install-gpu.sh` run. Re-run it on the host.
+
+### Containers fail to start after NVIDIA driver update ("unsupported protocol" / "failed to create TTRPC connection")
+containerd has stale shim state from before the driver update. Fix:
+```bash
+sudo systemctl restart containerd && sudo systemctl restart docker
+```
+On Arch/CachyOS, the pacman hook installed by `install-gpu.sh` does this automatically on every future update. Also verify Docker isn't using `nvidia` as its default runtime — it should be `runc`:
+```bash
+docker info | grep "Default Runtime"
+# Should output: Default Runtime: runc
+```
+If it shows `nvidia`, re-run `install-gpu.sh` to correct it.
 
 ### hashcat doesn't see GPU
 Try `hashcat -I` to check backends. If OpenCL isn't listed, run `gpu-check` to debug. The CUDA backend may work even without OpenCL.
