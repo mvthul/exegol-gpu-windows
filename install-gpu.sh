@@ -508,14 +508,72 @@ with open('$SHELL_RC','w') as f: f.write(text)
 
 # exegol-gpu: --gpu wrapper (added by install-gpu.sh)
 # Translates 'exegol start <name> <image> --gpu' into the right flags.
-# No hardcoded driver versions - nvidia-container-toolkit handles everything.
+# Uses nvidia runtime only at container creation time, then restores runc.
+# If the container already has GPU (NVIDIA_VISIBLE_DEVICES in env), just starts it.
+# If the container exists without GPU, auto-deletes and recreates it with GPU.
 exegol() {
     if [[ "\$1" == "start" ]] && [[ " \$* " == *" --gpu "* ]]; then
+        local name="\$2"
         local args=("\${@/--gpu/}")
+
+        # Check for nvidia driver/library version mismatch before GPU start
+        local loaded_ver=\$(cat /proc/driver/nvidia/version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' | head -1)
+        local lib_ver=\$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null)
+        if [[ -z "\$lib_ver" ]] || [[ "\$loaded_ver" != "\$lib_ver" ]]; then
+            echo "\e[1;31m[!] NVIDIA driver mismatch: kernel=\$loaded_ver libs=\${lib_ver:-unknown}\e[0m"
+            echo "\e[1;33m[*] GPU was updated since last boot. Reboot required.\e[0m"
+            echo -n "    Reboot now? [y/N] "
+            read -r reply
+            if [[ "\$reply" =~ ^[Yy]\$ ]]; then
+                systemctl reboot
+            fi
+            return 1
+        fi
+
+        # Determine if we need to switch to nvidia runtime:
+        #   - Container doesn't exist yet → create fresh with nvidia runtime
+        #   - Container exists but lacks NVIDIA_VISIBLE_DEVICES → recreate with nvidia runtime
+        #   - Container exists and already has GPU env → just start it (no runtime swap)
+        local needs_runtime_swap=false
+        local container_id
+        container_id=\$(docker ps -a --format '{{.Names}} {{.ID}}' 2>/dev/null | grep "^exegol-\${name} " | awk '{print \$2}')
+        if [[ -z "\$container_id" ]]; then
+            needs_runtime_swap=true
+        elif ! docker inspect "\$container_id" --format '{{json .Config.Env}}' 2>/dev/null | grep -q "NVIDIA_VISIBLE_DEVICES"; then
+            echo "\e[1;33m[!]\e[0m Container exists without GPU support, recreating with nvidia runtime..."
+            docker rm -f "\$container_id" >/dev/null
+            needs_runtime_swap=true
+        fi
+
+        if [[ "\$needs_runtime_swap" == "true" ]]; then
+            echo "\e[0;34m[*]\e[0m Switching to nvidia runtime for GPU container creation..."
+            sudo python3 -c "
+import json
+with open('/etc/docker/daemon.json') as f: d = json.load(f)
+d['default-runtime'] = 'nvidia'
+with open('/etc/docker/daemon.json', 'w') as f: json.dump(d, f, indent=4); f.write('\n')
+"
+            sudo systemctl restart docker
+        fi
+
         sudo -E ${EXEGOL_BIN} \${args[@]} \\
             --privileged \\
             -e NVIDIA_VISIBLE_DEVICES=all \\
             -e NVIDIA_DRIVER_CAPABILITIES=compute,utility
+        local exit_code=\$?
+
+        if [[ "\$needs_runtime_swap" == "true" ]]; then
+            echo "\e[0;34m[*]\e[0m Restoring runc as default runtime..."
+            sudo python3 -c "
+import json
+with open('/etc/docker/daemon.json') as f: d = json.load(f)
+d['default-runtime'] = 'runc'
+with open('/etc/docker/daemon.json', 'w') as f: json.dump(d, f, indent=4); f.write('\n')
+"
+            sudo systemctl restart docker
+        fi
+
+        return \$exit_code
     else
         sudo -E ${EXEGOL_BIN} "\$@"
     fi
@@ -523,8 +581,11 @@ exegol() {
 SHELLWRAPPER
 
     echo -e "${GREEN}[+]${NC} GPU wrapper added to ${SHELL_RC}"
-    echo -e "${BLUE}[*]${NC}   Added exegol() function that translates --gpu into:"
-    echo -e "${BLUE}[*]${NC}     --privileged -e NVIDIA_VISIBLE_DEVICES=all -e NVIDIA_DRIVER_CAPABILITIES=compute,utility"
+    echo -e "${BLUE}[*]${NC}   Wrapper features:"
+    echo -e "${BLUE}[*]${NC}     - Driver mismatch check (warns and offers reboot)"
+    echo -e "${BLUE}[*]${NC}     - Switches to nvidia runtime only at container creation time"
+    echo -e "${BLUE}[*]${NC}     - Auto-detects existing containers without GPU and recreates them"
+    echo -e "${BLUE}[*]${NC}     - Restores runc as default after creation"
     echo -e "${BLUE}[*]${NC}   Run 'source ${SHELL_RC}' or open a new terminal to activate"
 }
 

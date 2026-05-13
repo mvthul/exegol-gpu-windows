@@ -67,8 +67,22 @@ gpu-watch     # live nvidia-smi monitor
 - On Arch/CachyOS: installs a pacman hook that auto-restarts containerd + Docker after every NVIDIA update
 - Writes all detected values to `gpu-host.conf`
 - Copies `setup-gpu.sh` and patches `load_user_setup.sh`
-- Adds an `exegol()` shell wrapper that translates `--gpu` into `--privileged -e NVIDIA_VISIBLE_DEVICES=all -e NVIDIA_DRIVER_CAPABILITIES=compute,utility`
+- Adds a smart `exegol()` shell wrapper (see below)
 - No hardcoded driver versions — survives driver updates without changes
+
+### Shell Wrapper (`exegol()` function in `~/.zshrc` / `~/.bashrc`)
+
+The wrapper intercepts `exegol start <name> <image> --gpu` and handles three cases:
+
+| Container state | Action |
+|----------------|--------|
+| Does not exist | Switch default runtime → `nvidia`, create container, restore `runc` |
+| Exists, no GPU | Auto-delete and recreate with `nvidia` runtime, then restore `runc` |
+| Exists with GPU | Start normally — no runtime swap needed |
+
+It also checks for NVIDIA driver/library version mismatch before starting and offers to reboot if a driver update hasn't been reflected in the running kernel.
+
+`runc` stays the default runtime at all times — `nvidia` is only set temporarily during container creation. This prevents all non-GPU containers from breaking after driver updates.
 
 ### Container Side (`setup-gpu.sh`)
 
