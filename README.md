@@ -151,3 +151,42 @@ Try `hashcat -I` to check backends. If OpenCL isn't listed, run `gpu-check` to d
 ## License
 
 MIT
+
+## Windows / WSL2 + NVIDIA
+
+Windows is supported through Docker Desktop's Linux engine and WSL2 GPU
+passthrough. Native Windows containers are not supported by Exegol.
+
+Prerequisites:
+
+1. WSL2 enabled and Docker Desktop using the WSL2 backend
+2. Docker Desktop WSL integration enabled for the distribution you use
+3. The current NVIDIA Windows driver (do not install a separate Linux driver
+   in WSL2)
+4. Exegol installed in PowerShell: `py -m pip install exegol`
+
+From PowerShell in this repository, run:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\install-gpu-windows.ps1
+```
+
+The installer validates Docker Desktop, runs the same `--gpus all` check used
+by Docker's WSL2 integration, and installs the container-side setup script in
+`$HOME\.exegol\my-resources\setup\gpu`.
+
+Start Exegol with the generated launcher:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "$HOME\.exegol\exegol-gpu.ps1" start mybox full
+```
+
+To run only the repeatable GPU check:
+
+```powershell
+.\gpu-smoke-test.ps1
+```
+
+If the smoke test fails, fix Docker Desktop/NVIDIA/WSL2 first; Exegol cannot
+make a GPU available when `docker run --gpus all ... nvidia-smi` fails.
