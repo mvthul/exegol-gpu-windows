@@ -59,7 +59,7 @@ $env:PYTHONUTF8 = '1'
 $env:EXEGOL_GPU_RUNTIME = 'nvidia'
 $shim = Join-Path $env:USERPROFILE '.exegol\gpu-python'
 if ($env:PYTHONPATH) { $env:PYTHONPATH = "$shim;$env:PYTHONPATH" } else { $env:PYTHONPATH = $shim }
-$gpuArgs = @('--privileged', '--network', 'docker', '--disable-X11', '--disable-shared-timezones', '--env', 'NVIDIA_VISIBLE_DEVICES=all', '--env', 'NVIDIA_DRIVER_CAPABILITIES=compute,utility')
+$gpuArgs = @('--privileged', '--network', 'docker', '--disable-shared-timezones', '--env', 'NVIDIA_VISIBLE_DEVICES=all', '--env', 'NVIDIA_DRIVER_CAPABILITIES=compute,utility')
 & exegol @Arguments @gpuArgs
 exit $LASTEXITCODE
 '@ | Set-Content -Encoding utf8 $launcherPath

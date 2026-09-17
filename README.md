@@ -177,7 +177,8 @@ by Docker's WSL2 integration, and installs the container-side setup script in
 `$HOME\.exegol\my-resources\setup\gpu`.
 
 The generated launcher enables Docker's registered `nvidia` runtime for
-Exegol container creation and sets the required NVIDIA environment variables.
+Exegol container creation, keeps WSLg X11 sharing enabled, and sets the
+required NVIDIA environment variables.
 
 Start Exegol with the generated launcher:
 
@@ -187,9 +188,10 @@ powershell -ExecutionPolicy Bypass -File "$HOME\.exegol\exegol-gpu.ps1" start my
 
 The installer starts the Debian WSL2 distribution when present. Keep it
 running while Docker Desktop creates Exegol containers; otherwise Docker may
-report a missing `/run/guest-services/distro-services/debian.sock`. The
-launcher also selects Docker network mode and disables Linux-host X11/timezone
-mounts that are not available through Docker Desktop.
+report a missing `/run/guest-services/distro-services/debian.sock`. WSLg
+provides the X11 socket, so graphical applications such as Firefox open as
+Windows desktop windows. The launcher selects Docker network mode and only
+disables the Linux-host timezone mount.
 
 To run only the repeatable GPU check:
 
