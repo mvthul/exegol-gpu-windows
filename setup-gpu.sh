@@ -180,12 +180,20 @@ fi
 # --------------------------------------------------------------------------
 # 8. Environment variables
 # --------------------------------------------------------------------------
+DESKTOP_DISPLAY=""
+for socket in /tmp/.X11-unix/X[0-9]*; do
+    [ -S "$socket" ] || continue
+    DESKTOP_DISPLAY=":$(basename "$socket" | sed 's/^X//')"
+    break
+done
+
 cat > /etc/profile.d/gpu-env.sh << GPUENV
 # NVIDIA GPU environment - auto-configured by setup-gpu.sh
 # Driver: ${MOUNTED_DRIVER} | Lib dir: ${NVIDIA_LIB_DIR}
 export NVIDIA_VISIBLE_DEVICES=all
 export NVIDIA_DRIVER_CAPABILITIES=compute,utility
 export LD_LIBRARY_PATH="${NVIDIA_LIB_DIR}\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
+${DESKTOP_DISPLAY:+export DISPLAY=${DESKTOP_DISPLAY}}
 GPUENV
 chmod +x /etc/profile.d/gpu-env.sh
 source /etc/profile.d/gpu-env.sh

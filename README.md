@@ -199,3 +199,16 @@ To run only the repeatable GPU check:
 
 If the smoke test fails, fix Docker Desktop/NVIDIA/WSL2 first; Exegol cannot
 make a GPU available when `docker run --gpus all ... nvidia-smi` fails.
+
+When using Exegol Remote Desktop, graphical applications use the desktop
+display inside the container. If an application reports `no DISPLAY
+environment variable`, run `echo $DISPLAY` and set it to the X socket shown by
+`ls /tmp/.X11-unix`, for example:
+
+```bash
+export DISPLAY=:2
+firefox >/tmp/firefox.log 2>&1 &
+```
+
+The GPU setup script detects this display automatically for newly created
+containers.
